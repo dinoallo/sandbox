@@ -1,0 +1,32 @@
+[package]
+name = "launcher"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process"] }
+tonic = { version = "0.9", features = ["transport"] }
+prost = "0.11"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
+async-trait = "0.1"
+serde_json = "1.0"
+hyper = { version = "0.14", features = ["client", "stream"] }
+hyperlocal = "0.8"
+tracing = "0.1"
+log = "0.4"
+env_logger = "0.10"
+
+bytes = "1"
+
+# For network operations (optional/mock-safe)
+rtnetlink = "0.10"
+nix = { version = "0.27", features = ["sched", "process"] }
+futures-util = "0.3"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+[build-dependencies]
+tonic-build = "0.9"
+
+[workspace]
+members = ["."]

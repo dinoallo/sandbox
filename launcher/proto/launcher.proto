@@ -1,0 +1,38 @@
+syntax = "proto3";
+package launcher.v1alpha1;
+
+service Launcher {
+  rpc Create(CreateRequest) returns (CreateResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  // simple health check to verify launcher responsiveness
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+message CreateRequest {
+  string name = 1; // container name
+  string image = 2; // container image reference (optional)
+  string ip = 3;    // ip to delegate to container (optional)
+}
+
+message CreateResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message DeleteRequest {
+  string name = 1; // container name
+}
+
+message DeleteResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message PingRequest {
+  string name = 1; // optional identifier
+}
+
+message PingResponse {
+  bool ok = 1;
+  string message = 2;
+}

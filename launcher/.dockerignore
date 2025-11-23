@@ -1,0 +1,9 @@
+target
+**/*.rs.bk
+**/target
+Cargo.lock
+**/node_modules
+**/.git
+**/dist
+*.log
+Dockerfile
