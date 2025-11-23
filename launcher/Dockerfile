@@ -3,7 +3,12 @@ WORKDIR /usr/src/launcher
 
 # Install system deps needed for building some crates (ssl, pkg-config)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates pkg-config libssl-dev build-essential \
+    && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    pkg-config \
+    libssl-dev \
+    build-essential \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Cargo manifests first for caching
