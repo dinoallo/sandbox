@@ -23,16 +23,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while idx < args.len() {
         match args[idx].as_str() {
             "--image" => {
-                if idx + 1 < args.len() { image = args[idx + 1].clone(); idx += 2; }
-                else { eprintln!("--image requires a value"); std::process::exit(2); }
+                if idx + 1 < args.len() {
+                    image = args[idx + 1].clone();
+                    idx += 2;
+                } else {
+                    eprintln!("--image requires a value");
+                    std::process::exit(2);
+                }
             }
             "--ip" => {
-                if idx + 1 < args.len() { ip = args[idx + 1].clone(); idx += 2; }
-                else { eprintln!("--ip requires a value"); std::process::exit(2); }
+                if idx + 1 < args.len() {
+                    ip = args[idx + 1].clone();
+                    idx += 2;
+                } else {
+                    eprintln!("--ip requires a value");
+                    std::process::exit(2);
+                }
             }
             "--addr" => {
-                if idx + 1 < args.len() { addr = args[idx + 1].clone(); idx += 2; }
-                else { eprintln!("--addr requires a value"); std::process::exit(2); }
+                if idx + 1 < args.len() {
+                    addr = args[idx + 1].clone();
+                    idx += 2;
+                } else {
+                    eprintln!("--addr requires a value");
+                    std::process::exit(2);
+                }
             }
             other => {
                 eprintln!("Unknown flag: {}", other);
@@ -42,7 +57,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Connect to server
-    let channel = Channel::from_shared(addr)?.timeout(Duration::from_secs(5)).connect().await?;
+    let channel = Channel::from_shared(addr)?
+        .timeout(Duration::from_secs(5))
+        .connect()
+        .await?;
     let mut client = launcher::launcher_client::LauncherClient::new(channel);
 
     match cmd {
@@ -50,20 +68,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let req = launcher::PingRequest { name: name.clone() };
             let resp = client.ping(req).await?;
             let inner = resp.into_inner();
-            println!("ping response: ok={} message=\"{}\"", inner.ok, inner.message);
+            println!(
+                "ping response: ok={} message=\"{}\"",
+                inner.ok, inner.message
+            );
         }
-        
+
         "create" => {
-            let req = launcher::CreateRequest { name: name.clone(), image: image.clone(), ip: ip.clone() };
+            let req = launcher::CreateRequest {
+                name: name.clone(),
+                image: image.clone(),
+                ip: ip.clone(),
+            };
             let resp = client.create(req).await?;
             let inner = resp.into_inner();
-            println!("create response: success={} message=\"{}\"", inner.success, inner.message);
+            println!(
+                "create response: success={} message=\"{}\"",
+                inner.success, inner.message
+            );
         }
         "delete" => {
             let req = launcher::DeleteRequest { name: name.clone() };
             let resp = client.delete(req).await?;
             let inner = resp.into_inner();
-            println!("delete response: success={} message=\"{}\"", inner.success, inner.message);
+            println!(
+                "delete response: success={} message=\"{}\"",
+                inner.success, inner.message
+            );
         }
         _ => {
             eprintln!("Unknown command: {}", cmd);

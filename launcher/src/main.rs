@@ -7,8 +7,8 @@ mod lxd;
 mod netops;
 mod service;
 
-use service::LauncherService;
 use lxd::{MockLxdClient, RealLxdClient};
+use service::LauncherService;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -19,7 +19,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(%addr, "Starting launcher gRPC server");
 
     // choose between mock and real implementation via env var USE_REAL_LXD=1
-    let use_real = std::env::var("USE_REAL_LXD").map(|v| v == "1" || v.to_lowercase() == "true").unwrap_or(false);
+    let use_real = std::env::var("USE_REAL_LXD")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false);
     let lxd_client: Box<dyn lxd::LxdClient + Send + Sync> = if use_real {
         Box::new(RealLxdClient::new())
     } else {
