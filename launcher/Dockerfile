@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM rust:1.72-slim AS builder
+FROM --platform=$BUILDPLATFORM rust:1-slim AS builder
 WORKDIR /usr/src/launcher
 
 # Install system deps needed for building some crates (ssl, pkg-config)
