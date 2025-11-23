@@ -27,11 +27,26 @@ jobs:
             ~/.cargo/git
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Cache Cargo target (includes generated protobuf outputs)
+        uses: actions/cache@v4
+        with:
+          path: |
+            launcher/target
+          # include proto files in the cache key so any proto change invalidates cached artifacts
+          key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('launcher/proto/**') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}-
+
       - name: Install Rust (stable)
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
+
+      - name: Install protobuf compiler (protoc)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y protobuf-compiler
 
       - name: Run rustfmt check
         working-directory: launcher
