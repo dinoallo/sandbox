@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM rust:1.72-slim as builder
+FROM --platform=$BUILDPLATFORM rust:1.72-slim AS builder
 WORKDIR /usr/src/launcher
 
 # Install system deps needed for building some crates (ssl, pkg-config)
@@ -7,12 +7,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Cargo manifests first for caching
-COPY Cargo.toml Cargo.lock ./
-COPY build.rs ./
-COPY proto ./proto
+COPY launcher/Cargo.toml launcher/Cargo.lock ./
+COPY launcher/build.rs ./
+COPY launcher/proto ./proto
 
 # Copy workspace files (assumes full launcher subdir copy)
-COPY src ./src
+COPY launcher/src ./src
 
 # Build release binary
 RUN cargo build --release --bin launcher
