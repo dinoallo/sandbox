@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use hyper::body::to_bytes;
@@ -10,8 +10,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum LxdError {
-    #[error("container not found")]
-    NotFound,
+    // #[error("container not found")]
+    // NotFound,
     #[error("operation failed: {0}")]
     Other(String),
 }
@@ -198,7 +198,7 @@ impl RealLxdClient {
             .pointer("/metadata/status_code")
             .and_then(|v| v.as_i64())
         {
-            if code >= 200 && code < 300 {
+            if (200..300).contains(&code) {
                 return Ok(());
             } else {
                 let msg = resp
@@ -250,16 +250,11 @@ impl LxdClient for MockLxdClient {
         Ok(())
     }
 
-    async fn wait_for_pid(&self, name: &str, timeout: Duration) -> Result<u32, LxdError> {
+    async fn wait_for_pid(&self, name: &str, _timeout: Duration) -> Result<u32, LxdError> {
         tracing::info!(container=%name, "mock wait for pid");
-        let start = Instant::now();
-        while start.elapsed() < timeout {
-            // simulate asynchronous startup
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            // return a fake pid (nonzero)
-            return Ok(12345);
-        }
-        Err(LxdError::Other("timeout waiting for pid".into()))
+        // simulate short asynchronous startup and return a fake pid
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        Ok(12345)
     }
 
     async fn delete_container(&self, name: &str) -> Result<(), LxdError> {
@@ -267,14 +262,11 @@ impl LxdClient for MockLxdClient {
         Ok(())
     }
 
-    async fn wait_for_shutdown(&self, name: &str, timeout: Duration) -> Result<(), LxdError> {
+    async fn wait_for_shutdown(&self, name: &str, _timeout: Duration) -> Result<(), LxdError> {
         tracing::info!(container=%name, "mock wait for shutdown");
-        let start = Instant::now();
-        while start.elapsed() < timeout {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            return Ok(());
-        }
-        Err(LxdError::Other("timeout waiting for shutdown".into()))
+        // simulate short asynchronous shutdown
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        Ok(())
     }
 
     fn clone_box(&self) -> Box<dyn LxdClient + Send + Sync> {

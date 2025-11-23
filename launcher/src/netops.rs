@@ -1,6 +1,5 @@
 use futures_util::TryStreamExt;
 use nix::sched::{setns, CloneFlags};
-use rtnetlink;
 use std::fs::File;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
@@ -169,7 +168,7 @@ impl NetOperator for RealNetOps {
         }
 
         // try best-effort: set eth0 promisc
-        if let Ok(s) = handle
+        if let Ok(Some(msg)) = handle
             .link()
             .get()
             .match_name("eth0".to_string())
@@ -177,14 +176,12 @@ impl NetOperator for RealNetOps {
             .try_next()
             .await
         {
-            if let Some(msg) = s {
-                let _ = handle
-                    .link()
-                    .set(msg.header.index)
-                    .promiscuous(true)
-                    .execute()
-                    .await;
-            }
+            let _ = handle
+                .link()
+                .set(msg.header.index)
+                .promiscuous(true)
+                .execute()
+                .await;
         }
 
         // move eth1 into container netns by fd
