@@ -291,7 +291,26 @@ impl LxdClient for RealLxdClient {
         let body = json!({"name": name, "source": {"type": "image", "alias": image}});
         let resp = self.post_json("/1.0/instances", body).await?;
 
-        // If LXD returned an async operation, follow it until completion
+        // If the API returned a status code embedded in metadata and it indicates
+        // failure, return early with a descriptive error. Some LXD endpoints include
+        // a metadata.status_code even when HTTP was successful.
+        if let Some(code) = resp
+            .pointer("/metadata/status_code")
+            .and_then(|v| v.as_i64())
+        {
+            if !(200..300).contains(&code) {
+                let msg = resp
+                    .pointer("/metadata/err")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("operation failed");
+                return Err(LxdError::Other(format!(
+                    "create failed status_code={} err={}",
+                    code, msg
+                )));
+            }
+        }
+
+        // If LXD returned an async operation, follow it until completion.
         if let Some(op) = RealLxdClient::find_operation_path_in_value(&resp) {
             tracing::info!(operation=%op, "create returned operation; waiting for completion");
             self.wait_for_operation(&op, Duration::from_secs(60))
@@ -342,6 +361,25 @@ impl LxdClient for RealLxdClient {
         let resp = self
             .delete_path(&format!("/1.0/instances/{}", name))
             .await?;
+
+        // If the API returned a status code embedded in metadata and it indicates
+        // failure, return early with an error — similar to create_container.
+        if let Some(code) = resp
+            .pointer("/metadata/status_code")
+            .and_then(|v| v.as_i64())
+        {
+            if !(200..300).contains(&code) {
+                let msg = resp
+                    .pointer("/metadata/err")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("operation failed");
+                return Err(LxdError::Other(format!(
+                    "delete failed status_code={} err={}",
+                    code, msg
+                )));
+            }
+        }
+
         if let Some(op) = RealLxdClient::find_operation_path_in_value(&resp) {
             tracing::info!(operation=%op, "delete returned operation; waiting for completion");
             self.wait_for_operation(&op, Duration::from_secs(60))
