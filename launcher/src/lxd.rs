@@ -191,7 +191,7 @@ impl RealLxdClient {
             op_path.to_string()
         };
 
-        let wait_path = format!("{}/wait?timeout={}s", op, timeout.as_secs());
+        let wait_path = format!("{}/wait?timeout={}", op, timeout.as_secs());
 
         tracing::debug!(operation=%op, wait=%wait_path, "waiting for operation completion");
 
