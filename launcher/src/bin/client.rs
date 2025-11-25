@@ -2,10 +2,14 @@ use std::env;
 use std::time::Duration;
 
 use tonic::transport::Channel;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
+    // Initialize tracing for the CLI. RUST_LOG controls verbosity (e.g. RUST_LOG=info).
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
 
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {

@@ -12,7 +12,6 @@ use service::LauncherService;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
     tracing_subscriber::fmt::init();
 
     let addr: SocketAddr = "127.0.0.1:50051".parse()?;
