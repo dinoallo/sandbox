@@ -291,7 +291,18 @@ impl LxdClient for RealLxdClient {
     async fn create_container(&self, name: &str, image: &str) -> Result<(), LxdError> {
         tracing::info!(container=%name, image=%image, "creating container via lxd api");
         // POST /1.0/instances with source image
-        let body = json!({"name": name, "source": {"type": "image", "alias": image}});
+        //TODO: make server configurable?
+        let body = {
+            json!({
+                "name": name,
+                "source": {
+                    "type": "image",
+                    "alias": image,
+                    "protocol": "simplestreams",
+                    "server": "https://images.lxd.canonical.com"
+                }
+            })
+        };
         let resp = self.post_json("/1.0/instances", body).await?;
 
         // If the API returned a status code embedded in metadata and it indicates
