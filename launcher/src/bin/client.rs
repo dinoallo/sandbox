@@ -1,6 +1,7 @@
 use std::env;
 use std::time::Duration;
 
+use tokio::time::timeout as tokio_timeout;
 use tonic::transport::Channel;
 use tracing_subscriber::EnvFilter;
 
@@ -67,6 +68,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let mut client = launcher::launcher_client::LauncherClient::new(channel);
 
+    // RPC timeout (seconds) for operations that may take longer (create/delete).
+    let rpc_timeout_secs: u64 = std::env::var("LAUNCHER_CLIENT_RPC_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(120);
+
     match cmd {
         "ping" => {
             let req = launcher::PingRequest { name: name.clone() };
@@ -84,21 +91,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 image: image.clone(),
                 ip: ip.clone(),
             };
-            let resp = client.create(req).await?;
-            let inner = resp.into_inner();
-            println!(
-                "create response: success={} message=\"{}\"",
-                inner.success, inner.message
-            );
+            // Create can take a while (image download, container startup). Use a longer
+            // timeout and expose it via LAUNCHER_CLIENT_RPC_TIMEOUT_SECONDS.
+            match tokio_timeout(Duration::from_secs(rpc_timeout_secs), client.create(req)).await {
+                Ok(Ok(resp)) => {
+                    let inner = resp.into_inner();
+                    println!(
+                        "create response: success={} message=\"{}\"",
+                        inner.success, inner.message
+                    );
+                }
+                Ok(Err(status)) => {
+                    eprintln!("create RPC failed: {}", status);
+                    std::process::exit(1);
+                }
+                Err(_) => {
+                    eprintln!("create RPC timed out after {} seconds", rpc_timeout_secs);
+                    std::process::exit(1);
+                }
+            }
+            // response already handled in match
         }
         "delete" => {
             let req = launcher::DeleteRequest { name: name.clone() };
-            let resp = client.delete(req).await?;
-            let inner = resp.into_inner();
-            println!(
-                "delete response: success={} message=\"{}\"",
-                inner.success, inner.message
-            );
+            // Deleting may also block for a bit; reuse the same RPC timeout policy.
+            match tokio_timeout(Duration::from_secs(rpc_timeout_secs), client.delete(req)).await {
+                Ok(Ok(resp)) => {
+                    let inner = resp.into_inner();
+                    println!(
+                        "delete response: success={} message=\"{}\"",
+                        inner.success, inner.message
+                    );
+                }
+                Ok(Err(status)) => {
+                    eprintln!("delete RPC failed: {}", status);
+                    std::process::exit(1);
+                }
+                Err(_) => {
+                    eprintln!("delete RPC timed out after {} seconds", rpc_timeout_secs);
+                    std::process::exit(1);
+                }
+            }
+            // response already handled in match
         }
         _ => {
             eprintln!("Unknown command: {}", cmd);
