@@ -298,7 +298,14 @@ impl LxdClient for RealLxdClient {
             .pointer("/metadata/status_code")
             .and_then(|v| v.as_i64())
         {
-            if !(200..300).contains(&code) {
+            // Status code 103 indicates the operation was accepted and is
+            // running in the background (async operation). In that case we
+            // should *not* return early with an error — we should follow the
+            // operation path if available. Only treat other non-2xx codes as
+            // failures.
+            if code == 103 {
+                tracing::debug!("create returned background operation (103) — continuing to follow operation if present");
+            } else if !(200..300).contains(&code) {
                 let msg = resp
                     .pointer("/metadata/err")
                     .and_then(|v| v.as_str())
@@ -362,13 +369,17 @@ impl LxdClient for RealLxdClient {
             .delete_path(&format!("/1.0/instances/{}", name))
             .await?;
 
-        // If the API returned a status code embedded in metadata and it indicates
-        // failure, return early with an error — similar to create_container.
+        // If the API returned a status code embedded in metadata and it
+        // indicates failure, return early with an error — but don't treat
+        // 103 (background operation) as a failure (we'll follow the operation
+        // path below if present).
         if let Some(code) = resp
             .pointer("/metadata/status_code")
             .and_then(|v| v.as_i64())
         {
-            if !(200..300).contains(&code) {
+            if code == 103 {
+                tracing::debug!("delete returned background operation (103) — continuing to follow operation if present");
+            } else if !(200..300).contains(&code) {
                 let msg = resp
                     .pointer("/metadata/err")
                     .and_then(|v| v.as_str())
