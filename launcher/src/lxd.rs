@@ -96,6 +96,7 @@ impl RealLxdClient {
             .map_err(|e| LxdError::Other(format!("read body failed: {}", e)))?;
         let v = serde_json::from_slice::<Value>(&body)
             .map_err(|e| LxdError::Other(format!("invalid json: {}", e)))?;
+        tracing::debug!(path=%path, resp=?v, "received JSON response from LXD");
         Ok(v)
     }
 
@@ -125,6 +126,7 @@ impl RealLxdClient {
             .map_err(|e| LxdError::Other(format!("read body failed: {}", e)))?;
         let v = serde_json::from_slice::<Value>(&body)
             .map_err(|e| LxdError::Other(format!("invalid json: {}", e)))?;
+        tracing::debug!(path=%path, resp=?v, "received JSON response from LXD");
         Ok(v)
     }
 
@@ -242,6 +244,7 @@ impl RealLxdClient {
             .map_err(|e| LxdError::Other(format!("read body failed: {}", e)))?;
         let v = serde_json::from_slice::<Value>(&body)
             .map_err(|e| LxdError::Other(format!("invalid json: {}", e)))?;
+        tracing::debug!(path=%path, resp=?v, "received JSON response from LXD");
         Ok(v)
     }
 }
