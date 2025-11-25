@@ -21,6 +21,10 @@ pub enum LxdError {
 pub trait LxdClient: Send + Sync {
     async fn create_container(&self, name: &str, image: &str) -> Result<(), LxdError>;
     async fn wait_for_pid(&self, name: &str, timeout: Duration) -> Result<u32, LxdError>;
+    /// Check connectivity to LXD; used to fail fast when configured to use a real client
+    /// Implementations should attempt the connection within `timeout` duration and may
+    /// retry multiple times before reporting an error.
+    async fn check_connection(&self, timeout: Duration, attempts: u32) -> Result<(), LxdError>;
     async fn delete_container(&self, name: &str) -> Result<(), LxdError>;
     async fn wait_for_shutdown(&self, name: &str, timeout: Duration) -> Result<(), LxdError>;
 
@@ -272,6 +276,11 @@ impl LxdClient for MockLxdClient {
     fn clone_box(&self) -> Box<dyn LxdClient + Send + Sync> {
         Box::new(MockLxdClient::new())
     }
+
+    async fn check_connection(&self, _timeout: Duration, _attempts: u32) -> Result<(), LxdError> {
+        // Mock client always ok
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -374,5 +383,33 @@ impl LxdClient for RealLxdClient {
 
     fn clone_box(&self) -> Box<dyn LxdClient + Send + Sync> {
         Box::new(RealLxdClient::new())
+    }
+
+    async fn check_connection(&self, timeout: Duration, attempts: u32) -> Result<(), LxdError> {
+        // perform up to `attempts` tries with the provided timeout per attempt
+        for i in 0..attempts {
+            tracing::debug!(attempt=%i, attempts=%attempts, "checking LXD connectivity");
+            match tokio::time::timeout(timeout, self.get_json("/1.0")).await {
+                Ok(Ok(v)) => {
+                    tracing::debug!(resp=?v, "LXD /1.0 responded");
+                    return Ok(());
+                }
+                Ok(Err(e)) => {
+                    tracing::debug!(err=%e, "LXD GET /1.0 failed");
+                }
+                Err(_) => {
+                    tracing::debug!("LXD /1.0 timed out waiting for response");
+                }
+            }
+
+            if i + 1 < attempts {
+                // short backoff before retrying
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        }
+
+        Err(LxdError::Other(
+            "timeout/retries exhausted when contacting LXD".into(),
+        ))
     }
 }

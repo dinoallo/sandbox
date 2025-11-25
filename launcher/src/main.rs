@@ -26,6 +26,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         Box::new(MockLxdClient::new())
     };
+    // If we're using a real LXD client, verify we can reach the daemon before serving.
+    if use_real {
+        // allow configuring timeout and attempts via environment for CI/developer convenience
+        let timeout_sec: u64 = std::env::var("LXD_CONNECT_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(5);
+        let attempts: u32 = std::env::var("LXD_CONNECT_ATTEMPTS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(3);
+
+        match lxd_client
+            .check_connection(std::time::Duration::from_secs(timeout_sec), attempts)
+            .await
+        {
+            Ok(()) => info!("connected to LXD API successfully"),
+            Err(e) => {
+                eprintln!(
+                    "Failed to contact LXD API after {} attempts: {}",
+                    attempts, e
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
     let svc = LauncherService::new(lxd_client);
 
     Server::builder()
