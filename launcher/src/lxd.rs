@@ -300,7 +300,8 @@ impl LxdClient for RealLxdClient {
                     "alias": image,
                     "protocol": "simplestreams",
                     "server": "https://images.lxd.canonical.com"
-                }
+                },
+                "start": true
             })
         };
         let resp = self.post_json("/1.0/instances", body).await?;
