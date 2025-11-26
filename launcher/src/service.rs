@@ -35,7 +35,7 @@ impl crate::launcher::launcher_server::Launcher for LauncherService {
         let req = req.into_inner();
         let name = req.name.clone();
         let image = if req.image.is_empty() {
-            "ubuntu:22.04".to_string()
+            "alpine/3.19".to_string()
         } else {
             req.image.clone()
         };
