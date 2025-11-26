@@ -1,5 +1,6 @@
 use futures_util::TryStreamExt;
 use nix::sched::{setns, CloneFlags};
+use rtnetlink::LinkUnspec;
 use std::fs::File;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
@@ -81,7 +82,7 @@ impl RealNetOps {
             .add(link_msg)
             .execute()
             .await
-            .map_err(NetOpsError::Netlink);
+            .map_err(NetOpsError::Netlink)?;
 
         // find created link
         let mut new_links = handle.link().get().match_name(name.to_string()).execute();
@@ -99,23 +100,11 @@ impl RealNetOps {
         handle: &rtnetlink::Handle,
         name: &str,
     ) -> Result<(), NetOpsError> {
-        use netlink_packet_route::link::{LinkAttribute, LinkFlags, State};
-
-        const IFF_UP: u32 = 0x1; // from if.h
-
         let mut links = handle.link().get().match_name(name.to_string()).execute();
         if let Some(msg) = links.try_next().await.map_err(NetOpsError::Netlink)? {
-            let mut set_msg = msg.clone();
-            set_msg
-                .attributes
-                .retain(|nla| !matches!(nla, LinkAttribute::OperState(_)));
-            set_msg.attributes.push(LinkAttribute::OperState(State::Up));
-            set_msg.header.flags |= LinkFlags::from_bits_truncate(IFF_UP);
-            set_msg.header.change_mask |= LinkFlags::from_bits_truncate(IFF_UP);
-
             handle
                 .link()
-                .set(set_msg)
+                .set(LinkUnspec::new_with_index(msg.header.index).up().build())
                 .execute()
                 .await
                 .map_err(NetOpsError::Netlink)?;
@@ -129,15 +118,16 @@ impl RealNetOps {
         idx: u32,
         fd: i32,
     ) -> Result<(), NetOpsError> {
-        use netlink_packet_route::link::LinkAttribute;
         let mut links = handle.link().get().execute();
         while let Some(msg) = links.try_next().await.map_err(NetOpsError::Netlink)? {
             if msg.header.index == idx {
-                let mut set_msg = msg.clone();
-                set_msg.attributes.push(LinkAttribute::NetNsFd(fd));
                 handle
                     .link()
-                    .set(set_msg)
+                    .set(
+                        LinkUnspec::new_with_index(msg.header.index)
+                            .setns_by_fd(fd)
+                            .build(),
+                    )
                     .execute()
                     .await
                     .map_err(NetOpsError::Netlink)?;
@@ -193,8 +183,8 @@ impl NetOperator for RealNetOps {
         let (connection, handle, _) = rtnetlink::new_connection().map_err(NetOpsError::Io)?;
         tokio::spawn(connection);
 
-        // create macvlan eth1 linked to eth0
-        let eth1_idx = self.create_macvlan(&handle, "eth0", "eth1").await?;
+        // create macvlan eth1 linked to veth0
+        let eth1_idx = self.create_macvlan(&handle, "veth0", "eth1").await?;
         // flags not required — we'll perform best-effort cleanup inline
 
         // bring eth1 up
@@ -204,11 +194,11 @@ impl NetOperator for RealNetOps {
             return Err(e);
         }
 
-        // try best-effort: set eth0 promisc
+        // try best-effort: set veth0 promisc
         if let Ok(Some(msg)) = handle
             .link()
             .get()
-            .match_name("eth0".to_string())
+            .match_name("veth0".to_string())
             .execute()
             .try_next()
             .await
