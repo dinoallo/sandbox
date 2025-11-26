@@ -59,11 +59,26 @@ impl RealNetOps {
         })?;
         let master_index = master_msg.header.index;
 
-        // create macvlan; mode=0 (private) or other — passthru mode varies by kernel
+        // create macvlan using netlink-packet-route types
+        use netlink_packet_route::link::LinkAttribute;
+        use netlink_packet_route::link::{
+            InfoData, InfoKind, LinkInfo, LinkLayerType, LinkMessage,
+        };
+        let mut link_msg = LinkMessage::default();
+        link_msg.header.index = 0; // 0 means create new
+        link_msg.header.link_layer_type = LinkLayerType::Ether;
+        link_msg
+            .attributes
+            .push(LinkAttribute::IfName(name.to_string()));
+        link_msg.attributes.push(LinkAttribute::Link(master_index));
+        link_msg.attributes.push(LinkAttribute::LinkInfo(vec![
+            LinkInfo::Kind(InfoKind::MacVlan),
+            LinkInfo::Data(InfoData::MacVlan(vec![])),
+        ]));
+
         let _ = handle
             .link()
-            .add()
-            .macvlan(name.to_string(), master_index, 0u32)
+            .add(link_msg)
             .execute()
             .await
             .map_err(NetOpsError::Netlink);
@@ -84,12 +99,23 @@ impl RealNetOps {
         handle: &rtnetlink::Handle,
         name: &str,
     ) -> Result<(), NetOpsError> {
+        use netlink_packet_route::link::{LinkAttribute, LinkFlags, State};
+
+        const IFF_UP: u32 = 0x1; // from if.h
+
         let mut links = handle.link().get().match_name(name.to_string()).execute();
         if let Some(msg) = links.try_next().await.map_err(NetOpsError::Netlink)? {
+            let mut set_msg = msg.clone();
+            set_msg
+                .attributes
+                .retain(|nla| !matches!(nla, LinkAttribute::OperState(_)));
+            set_msg.attributes.push(LinkAttribute::OperState(State::Up));
+            set_msg.header.flags |= LinkFlags::from_bits_truncate(IFF_UP);
+            set_msg.header.change_mask |= LinkFlags::from_bits_truncate(IFF_UP);
+
             handle
                 .link()
-                .set(msg.header.index)
-                .up()
+                .set(set_msg)
                 .execute()
                 .await
                 .map_err(NetOpsError::Netlink)?;
@@ -103,14 +129,25 @@ impl RealNetOps {
         idx: u32,
         fd: i32,
     ) -> Result<(), NetOpsError> {
-        handle
-            .link()
-            .set(idx)
-            .setns_by_fd(fd)
-            .execute()
-            .await
-            .map_err(NetOpsError::Netlink)?;
-        Ok(())
+        use netlink_packet_route::link::LinkAttribute;
+        let mut links = handle.link().get().execute();
+        while let Some(msg) = links.try_next().await.map_err(NetOpsError::Netlink)? {
+            if msg.header.index == idx {
+                let mut set_msg = msg.clone();
+                set_msg.attributes.push(LinkAttribute::NetNsFd(fd));
+                handle
+                    .link()
+                    .set(set_msg)
+                    .execute()
+                    .await
+                    .map_err(NetOpsError::Netlink)?;
+                return Ok(());
+            }
+        }
+        Err(NetOpsError::Permission(format!(
+            "link index {} not found",
+            idx
+        )))
     }
 
     async fn add_addr_by_name(
@@ -176,12 +213,12 @@ impl NetOperator for RealNetOps {
             .try_next()
             .await
         {
-            let _ = handle
-                .link()
-                .set(msg.header.index)
-                .promiscuous(true)
-                .execute()
-                .await;
+            use netlink_packet_route::link::LinkFlags;
+            const IFF_PROMISC: u32 = 0x100; // from if.h
+            let mut set_msg = msg.clone();
+            set_msg.header.flags |= LinkFlags::from_bits_truncate(IFF_PROMISC);
+            set_msg.header.change_mask |= LinkFlags::from_bits_truncate(IFF_PROMISC);
+            let _ = handle.link().set(set_msg).execute().await;
         }
 
         // move eth1 into container netns by fd

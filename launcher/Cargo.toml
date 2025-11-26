@@ -22,7 +22,8 @@ clap = { version = "4", features = ["derive", "env"] }
 tower = "0.4"
 
 # For network operations (optional/mock-safe)
-rtnetlink = "0.10"
+rtnetlink = "0.18"
+netlink-packet-route = "0.25"
 nix = { version = "0.27", features = ["sched", "process"] }
 futures-util = "0.3"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
