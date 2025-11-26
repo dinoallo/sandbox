@@ -10,6 +10,11 @@ to perform host networking operations (macvlan creation, namespace moves, etc.).
 The launcher gRPC server listens on a Unix socket instead of a TCP port. By default, it uses `/tmp/launcher.sock`.
 You can customize the socket path using the `LAUNCHER_SOCKET_PATH` environment variable.
 
+### Network Namespace Support
+
+The launcher can be configured to run in a specific network namespace using the `LAUNCHER_NETNS` environment variable.
+This is useful for isolating the launcher's network environment.
+
 Example:
 
 ```bash
@@ -18,6 +23,14 @@ cargo run --release
 
 # Start server with custom socket path
 LAUNCHER_SOCKET_PATH=/var/run/launcher.sock cargo run --release
+
+# Start server in a specific network namespace
+# (The namespace must already exist, created with: sudo ip netns add launcher-test)
+sudo LAUNCHER_NETNS=launcher-test cargo run --release
+
+# Or use the provided setup script
+sudo ./scripts/setup-netns.sh
+sudo LAUNCHER_NETNS=launcher-test cargo run --release
 ```
 
 The client CLI will automatically connect to the same socket:

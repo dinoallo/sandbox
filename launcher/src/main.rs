@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use nix::sched::{setns, CloneFlags};
+use std::fs::File;
 use tokio::net::UnixListener;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::Server;
@@ -12,9 +14,44 @@ mod service;
 use lxd::{MockLxdClient, RealLxdClient};
 use service::LauncherService;
 
+/// Enter a network namespace by name.
+/// The namespace must exist at /run/netns/{name} or /var/run/netns/{name}.
+fn enter_network_namespace(netns_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // Try both common locations for network namespaces
+    let paths = [
+        format!("/run/netns/{}", netns_name),
+        format!("/var/run/netns/{}", netns_name),
+    ];
+
+    let mut last_error = None;
+    for path in &paths {
+        match File::open(path) {
+            Ok(file) => {
+                setns(&file, CloneFlags::CLONE_NEWNET)?;
+                return Ok(());
+            }
+            Err(e) => {
+                last_error = Some(e);
+            }
+        }
+    }
+
+    Err(format!(
+        "Failed to open network namespace '{}': {:?}",
+        netns_name, last_error
+    )
+    .into())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
+
+    // Check if we should enter a specific network namespace
+    if let Ok(netns_name) = std::env::var("LAUNCHER_NETNS") {
+        enter_network_namespace(&netns_name)?;
+        info!(netns = %netns_name, "Entered network namespace");
+    }
 
     let socket_path =
         std::env::var("LAUNCHER_SOCKET_PATH").unwrap_or_else(|_| "/tmp/launcher.sock".to_string());

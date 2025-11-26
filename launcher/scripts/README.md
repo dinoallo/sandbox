@@ -29,8 +29,12 @@ Run the launcher in the network namespace:
 # Build the launcher first
 cargo build --release
 
-# Run in the namespace
+# Method 1: Use ip netns exec command
 sudo ip netns exec launcher-test /home/allosaurus/Workspace/sandbox/launcher/target/release/launcher
+
+# Method 2: Use LAUNCHER_NETNS environment variable (preferred)
+# The launcher will automatically enter the namespace at startup
+sudo LAUNCHER_NETNS=launcher-test cargo run --release
 ```
 
 Or enter the namespace interactively for debugging:
@@ -74,13 +78,13 @@ Once in the network namespace, you can:
 Example workflow:
 
 ```bash
-# Terminal 1: Start launcher in namespace
-sudo ip netns exec launcher-test cargo run --release
+# Terminal 1: Start launcher in namespace using LAUNCHER_NETNS
+sudo LAUNCHER_NETNS=launcher-test cargo run --release
 
 # Terminal 2: Run client from host (connects via Unix socket)
 cargo run --bin client -- create test-container --image ubuntu:22.04 --ip 172.16.0.1
 
-# Or specify a custom socket path
-sudo LAUNCHER_SOCKET_PATH=/var/run/launcher.sock ip netns exec launcher-test cargo run --release
+# Or specify a custom socket path for both server and client
+sudo LAUNCHER_SOCKET_PATH=/var/run/launcher.sock LAUNCHER_NETNS=launcher-test cargo run --release
 LAUNCHER_SOCKET_PATH=/var/run/launcher.sock cargo run --bin client -- ping test
 ```
