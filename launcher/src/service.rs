@@ -88,6 +88,12 @@ impl crate::launcher::launcher_server::Launcher for LauncherService {
 
         let _guard = self.state.lock().await;
 
+        // Stop the container first
+        self.client
+            .stop_container(&name)
+            .await
+            .map_err(|e| Status::internal(format!("stop failed: {}", e)))?;
+
         self.client
             .delete_container(&name)
             .await

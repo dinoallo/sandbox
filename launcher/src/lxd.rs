@@ -21,6 +21,7 @@ pub enum LxdError {
 pub trait LxdClient: Send + Sync {
     async fn create_container(&self, name: &str, image: &str) -> Result<(), LxdError>;
     async fn start_container(&self, name: &str) -> Result<(), LxdError>;
+    async fn stop_container(&self, name: &str) -> Result<(), LxdError>;
     async fn wait_for_pid(&self, name: &str, timeout: Duration) -> Result<u32, LxdError>;
     /// Check connectivity to LXD; used to fail fast when configured to use a real client
     /// Implementations should attempt the connection within `timeout` duration and may
@@ -294,6 +295,12 @@ impl LxdClient for MockLxdClient {
         Ok(())
     }
 
+    async fn stop_container(&self, name: &str) -> Result<(), LxdError> {
+        tracing::info!(container=%name, "mock stop container");
+        // pretend we stop the container
+        Ok(())
+    }
+
     async fn wait_for_pid(&self, name: &str, _timeout: Duration) -> Result<u32, LxdError> {
         tracing::info!(container=%name, "mock wait for pid");
         // simulate short asynchronous startup and return a fake pid
@@ -417,6 +424,51 @@ impl LxdClient for RealLxdClient {
 
         if let Some(op) = RealLxdClient::find_operation_path_in_value(&resp) {
             tracing::info!(operation=%op, "start returned operation; waiting for completion");
+            self.wait_for_operation(&op, Duration::from_secs(60))
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn stop_container(&self, name: &str) -> Result<(), LxdError> {
+        tracing::info!(container=%name, "stopping container via lxd api");
+        // POST /1.0/instances/<name>/state with action=stop
+        let body = {
+            json!({
+                "action": "stop",
+                "timeout": 30,
+                "force": true,
+                "stateful": false
+            })
+        };
+        let resp = self
+            .put_json(&format!("/1.0/instances/{}/state", name), body)
+            .await?;
+
+        // If the API returned a status code embedded in metadata and it
+        // indicates failure, return early with an error — but don't treat
+        // 103 (background operation) as a failure (we'll follow the operation
+        // path below if present).
+        if let Some(code) = resp
+            .pointer("/metadata/status_code")
+            .and_then(|v| v.as_i64())
+        {
+            if code == 103 {
+                tracing::debug!("stop returned background operation (103) — continuing to follow operation if present");
+            } else if !(200..300).contains(&code) {
+                let msg = resp
+                    .pointer("/metadata/err")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("operation failed");
+                return Err(LxdError::Other(format!(
+                    "stop failed status_code={} err={}",
+                    code, msg
+                )));
+            }
+        }
+
+        if let Some(op) = RealLxdClient::find_operation_path_in_value(&resp) {
+            tracing::info!(operation=%op, "stop returned operation; waiting for completion");
             self.wait_for_operation(&op, Duration::from_secs(60))
                 .await?;
         }
