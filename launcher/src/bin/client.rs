@@ -38,7 +38,7 @@ enum Commands {
         name: String,
         /// Container image
         #[arg(long)]
-        image: String,
+        image: Option<String>,
         /// IP address to assign (optional)
         #[arg(long)]
         ip: Option<String>,
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Create { name, image, ip } => {
             let req = launcher::CreateRequest {
                 name,
-                image,
+                image: image.unwrap_or_default(),
                 ip: ip.unwrap_or_default(),
             };
             // Create can take a while (image download, container startup). Use a longer
