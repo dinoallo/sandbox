@@ -20,6 +20,7 @@ pub enum LxdError {
 #[async_trait]
 pub trait LxdClient: Send + Sync {
     async fn create_container(&self, name: &str, image: &str) -> Result<(), LxdError>;
+    async fn start_container(&self, name: &str) -> Result<(), LxdError>;
     async fn wait_for_pid(&self, name: &str, timeout: Duration) -> Result<u32, LxdError>;
     /// Check connectivity to LXD; used to fail fast when configured to use a real client
     /// Implementations should attempt the connection within `timeout` duration and may
@@ -105,6 +106,36 @@ impl RealLxdClient {
         let body_str = serde_json::to_string(&body)
             .map_err(|e| LxdError::Other(format!("serialize failed: {}", e)))?;
         let req = Request::post(uri)
+            .header("content-type", "application/json")
+            .body(Body::from(body_str))
+            .map_err(|e| LxdError::Other(format!("build request failed: {}", e)))?;
+
+        let resp = self
+            .client
+            .request(req)
+            .await
+            .map_err(|e| LxdError::Other(format!("request failed: {}", e)))?;
+        if !resp.status().is_success() {
+            return Err(LxdError::Other(format!(
+                "status {} for {}",
+                resp.status(),
+                path
+            )));
+        }
+        let body = to_bytes(resp.into_body())
+            .await
+            .map_err(|e| LxdError::Other(format!("read body failed: {}", e)))?;
+        let v = serde_json::from_slice::<Value>(&body)
+            .map_err(|e| LxdError::Other(format!("invalid json: {}", e)))?;
+        tracing::debug!(path=%path, resp=?v, "received JSON response from LXD");
+        Ok(v)
+    }
+
+    async fn put_json(&self, path: &str, body: Value) -> Result<Value, LxdError> {
+        let uri: hyper::Uri = Uri::new(&self.socket_path, path).into();
+        let body_str = serde_json::to_string(&body)
+            .map_err(|e| LxdError::Other(format!("serialize failed: {}", e)))?;
+        let req = Request::put(uri)
             .header("content-type", "application/json")
             .body(Body::from(body_str))
             .map_err(|e| LxdError::Other(format!("build request failed: {}", e)))?;
@@ -257,6 +288,12 @@ impl LxdClient for MockLxdClient {
         Ok(())
     }
 
+    async fn start_container(&self, name: &str) -> Result<(), LxdError> {
+        tracing::info!(container=%name, "mock start container");
+        // pretend we start the container
+        Ok(())
+    }
+
     async fn wait_for_pid(&self, name: &str, _timeout: Duration) -> Result<u32, LxdError> {
         tracing::info!(container=%name, "mock wait for pid");
         // simulate short asynchronous startup and return a fake pid
@@ -335,6 +372,51 @@ impl LxdClient for RealLxdClient {
         // If LXD returned an async operation, follow it until completion.
         if let Some(op) = RealLxdClient::find_operation_path_in_value(&resp) {
             tracing::info!(operation=%op, "create returned operation; waiting for completion");
+            self.wait_for_operation(&op, Duration::from_secs(60))
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn start_container(&self, name: &str) -> Result<(), LxdError> {
+        tracing::info!(container=%name, "starting container via lxd api");
+        // POST /1.0/instances/<name>/state with action=start
+        let body = {
+            json!({
+                "action": "start",
+                "timeout": 30,
+                "force": true,
+                "stateful": false
+            })
+        };
+        let resp = self
+            .put_json(&format!("/1.0/instances/{}/state", name), body)
+            .await?;
+
+        // If the API returned a status code embedded in metadata and it
+        // indicates failure, return early with an error — but don't treat
+        // 103 (background operation) as a failure (we'll follow the operation
+        // path below if present).
+        if let Some(code) = resp
+            .pointer("/metadata/status_code")
+            .and_then(|v| v.as_i64())
+        {
+            if code == 103 {
+                tracing::debug!("start returned background operation (103) — continuing to follow operation if present");
+            } else if !(200..300).contains(&code) {
+                let msg = resp
+                    .pointer("/metadata/err")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("operation failed");
+                return Err(LxdError::Other(format!(
+                    "start failed status_code={} err={}",
+                    code, msg
+                )));
+            }
+        }
+
+        if let Some(op) = RealLxdClient::find_operation_path_in_value(&resp) {
+            tracing::info!(operation=%op, "start returned operation; waiting for completion");
             self.wait_for_operation(&op, Duration::from_secs(60))
                 .await?;
         }

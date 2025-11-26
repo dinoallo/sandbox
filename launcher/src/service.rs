@@ -48,6 +48,12 @@ impl crate::launcher::launcher_server::Launcher for LauncherService {
             .await
             .map_err(|e| Status::internal(format!("create failed: {}", e)))?;
 
+        // Start the container
+        self.client
+            .start_container(&name)
+            .await
+            .map_err(|e| Status::internal(format!("start failed: {}", e)))?;
+
         // Wait for container to be running and get main pid
         let pid = self
             .client
