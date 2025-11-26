@@ -1,9 +1,50 @@
-use std::env;
 use std::time::Duration;
 
+use clap::{Parser, Subcommand};
 use tokio::time::timeout as tokio_timeout;
 use tonic::transport::Channel;
 use tracing_subscriber::EnvFilter;
+
+/// Launcher gRPC client CLI
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// Server address
+    #[arg(long, default_value = "http://127.0.0.1:50051")]
+    addr: String,
+
+    /// RPC timeout in seconds for create/delete operations
+    #[arg(long, env = "LAUNCHER_CLIENT_RPC_TIMEOUT_SECONDS", default_value = "120")]
+    timeout: u64,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Ping the launcher service
+    Ping {
+        /// Name to send in ping request
+        name: String,
+    },
+    /// Create a new container
+    Create {
+        /// Container name
+        name: String,
+        /// Container image
+        #[arg(long)]
+        image: String,
+        /// IP address to assign (optional)
+        #[arg(long)]
+        ip: Option<String>,
+    },
+    /// Delete an existing container
+    Delete {
+        /// Container name
+        name: String,
+    },
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,71 +53,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 3 {
-        eprintln!("Usage: client <create|delete> <name> [--image <image>] [--ip <ip>] [--addr <host:port>]");
-        std::process::exit(2);
-    }
-
-    let cmd = args[1].as_str();
-    let name = args[2].clone();
-    let mut image = String::new();
-    let mut ip = String::new();
-    let mut addr = "http://127.0.0.1:50051".to_string();
-
-    let mut idx = 3;
-    while idx < args.len() {
-        match args[idx].as_str() {
-            "--image" => {
-                if idx + 1 < args.len() {
-                    image = args[idx + 1].clone();
-                    idx += 2;
-                } else {
-                    eprintln!("--image requires a value");
-                    std::process::exit(2);
-                }
-            }
-            "--ip" => {
-                if idx + 1 < args.len() {
-                    ip = args[idx + 1].clone();
-                    idx += 2;
-                } else {
-                    eprintln!("--ip requires a value");
-                    std::process::exit(2);
-                }
-            }
-            "--addr" => {
-                if idx + 1 < args.len() {
-                    addr = args[idx + 1].clone();
-                    idx += 2;
-                } else {
-                    eprintln!("--addr requires a value");
-                    std::process::exit(2);
-                }
-            }
-            other => {
-                eprintln!("Unknown flag: {}", other);
-                std::process::exit(2);
-            }
-        }
-    }
+    let cli = Cli::parse();
 
     // Connect to server
-    let channel = Channel::from_shared(addr)?
+    let channel = Channel::from_shared(cli.addr)?
         .timeout(Duration::from_secs(5))
         .connect()
         .await?;
     let mut client = launcher::launcher_client::LauncherClient::new(channel);
 
-    // RPC timeout (seconds) for operations that may take longer (create/delete).
-    let rpc_timeout_secs: u64 = std::env::var("LAUNCHER_CLIENT_RPC_TIMEOUT_SECONDS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(120);
-
-    match cmd {
-        "ping" => {
-            let req = launcher::PingRequest { name: name.clone() };
+    match cli.command {
+        Commands::Ping { name } => {
+            let req = launcher::PingRequest { name };
             let resp = client.ping(req).await?;
             let inner = resp.into_inner();
             println!(
@@ -85,15 +73,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
 
-        "create" => {
+        Commands::Create { name, image, ip } => {
             let req = launcher::CreateRequest {
-                name: name.clone(),
-                image: image.clone(),
-                ip: ip.clone(),
+                name,
+                image,
+                ip: ip.unwrap_or_default(),
             };
             // Create can take a while (image download, container startup). Use a longer
             // timeout and expose it via LAUNCHER_CLIENT_RPC_TIMEOUT_SECONDS.
-            match tokio_timeout(Duration::from_secs(rpc_timeout_secs), client.create(req)).await {
+            match tokio_timeout(Duration::from_secs(cli.timeout), client.create(req)).await {
                 Ok(Ok(resp)) => {
                     let inner = resp.into_inner();
                     println!(
@@ -106,16 +94,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(1);
                 }
                 Err(_) => {
-                    eprintln!("create RPC timed out after {} seconds", rpc_timeout_secs);
+                    eprintln!("create RPC timed out after {} seconds", cli.timeout);
                     std::process::exit(1);
                 }
             }
-            // response already handled in match
         }
-        "delete" => {
-            let req = launcher::DeleteRequest { name: name.clone() };
+        Commands::Delete { name } => {
+            let req = launcher::DeleteRequest { name };
             // Deleting may also block for a bit; reuse the same RPC timeout policy.
-            match tokio_timeout(Duration::from_secs(rpc_timeout_secs), client.delete(req)).await {
+            match tokio_timeout(Duration::from_secs(cli.timeout), client.delete(req)).await {
                 Ok(Ok(resp)) => {
                     let inner = resp.into_inner();
                     println!(
@@ -128,15 +115,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(1);
                 }
                 Err(_) => {
-                    eprintln!("delete RPC timed out after {} seconds", rpc_timeout_secs);
+                    eprintln!("delete RPC timed out after {} seconds", cli.timeout);
                     std::process::exit(1);
                 }
             }
-            // response already handled in match
-        }
-        _ => {
-            eprintln!("Unknown command: {}", cmd);
-            std::process::exit(2);
         }
     }
 

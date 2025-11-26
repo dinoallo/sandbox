@@ -17,6 +17,7 @@ tracing = "0.1"
 log = "0.4"
 
 bytes = "1"
+clap = { version = "4", features = ["derive", "env"] }
 
 # For network operations (optional/mock-safe)
 rtnetlink = "0.10"
