@@ -66,8 +66,8 @@ sudo ./scripts/cleanup-netns.sh
 
 Once in the network namespace, you can:
 
-1. Start the launcher service
-2. Use the client CLI from the host to connect to it
+1. Start the launcher service (it will create a Unix socket at `/tmp/launcher.sock` by default)
+2. Use the client CLI from the host to connect to it via the Unix socket
 3. Verify that containers can be created and have network connectivity
 4. Test IP delegation features in the isolated network environment
 
@@ -77,6 +77,10 @@ Example workflow:
 # Terminal 1: Start launcher in namespace
 sudo ip netns exec launcher-test cargo run --release
 
-# Terminal 2: Run client from host
-cargo run --bin client -- --addr http://127.0.0.1:50051 create test-container --image ubuntu:22.04 --ip 172.16.0.1
+# Terminal 2: Run client from host (connects via Unix socket)
+cargo run --bin client -- create test-container --image ubuntu:22.04 --ip 172.16.0.1
+
+# Or specify a custom socket path
+sudo LAUNCHER_SOCKET_PATH=/var/run/launcher.sock ip netns exec launcher-test cargo run --release
+LAUNCHER_SOCKET_PATH=/var/run/launcher.sock cargo run --bin client -- ping test
 ```

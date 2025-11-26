@@ -1,5 +1,7 @@
-use std::net::SocketAddr;
+use std::path::PathBuf;
 
+use tokio::net::UnixListener;
+use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::Server;
 use tracing::info;
 
@@ -14,8 +16,16 @@ use service::LauncherService;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    let addr: SocketAddr = "127.0.0.1:50051".parse()?;
-    info!(%addr, "Starting launcher gRPC server");
+    let socket_path =
+        std::env::var("LAUNCHER_SOCKET_PATH").unwrap_or_else(|_| "/tmp/launcher.sock".to_string());
+    let path = PathBuf::from(&socket_path);
+
+    // Remove existing socket file if it exists
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+
+    info!(socket_path = %socket_path, "Starting launcher gRPC server on Unix socket");
 
     // choose between mock and real implementation via env var USE_REAL_LXD=1
     let use_real = std::env::var("USE_REAL_LXD")
@@ -55,9 +65,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let svc = LauncherService::new(lxd_client);
 
+    let uds = UnixListener::bind(&path)?;
+    let uds_stream = UnixListenerStream::new(uds);
+
     Server::builder()
         .add_service(launcher::launcher_server::LauncherServer::new(svc))
-        .serve(addr)
+        .serve_with_incoming(uds_stream)
         .await?;
 
     Ok(())

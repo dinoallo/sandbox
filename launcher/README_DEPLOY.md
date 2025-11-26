@@ -5,6 +5,31 @@ launcher service on Kubernetes. The launcher requires access to the host LXD
 unix socket and the network capabilities it needs to configure networking (CAP_NET_ADMIN and CAP_SYS_ADMIN).
 to perform host networking operations (macvlan creation, namespace moves, etc.).
 
+## gRPC Server Configuration
+
+The launcher gRPC server listens on a Unix socket instead of a TCP port. By default, it uses `/tmp/launcher.sock`.
+You can customize the socket path using the `LAUNCHER_SOCKET_PATH` environment variable.
+
+Example:
+
+```bash
+# Start server with default socket path
+cargo run --release
+
+# Start server with custom socket path
+LAUNCHER_SOCKET_PATH=/var/run/launcher.sock cargo run --release
+```
+
+The client CLI will automatically connect to the same socket:
+
+```bash
+# Connect to default socket
+cargo run --bin client -- ping test
+
+# Connect to custom socket
+LAUNCHER_SOCKET_PATH=/var/run/launcher.sock cargo run --bin client -- create mycontainer --image ubuntu:22.04
+```
+
 Build image locally
 -------------------
 

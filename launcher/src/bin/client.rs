@@ -2,16 +2,21 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use tokio::time::timeout as tokio_timeout;
-use tonic::transport::Channel;
+use tonic::transport::{Endpoint, Uri};
+use tower::service_fn;
 use tracing_subscriber::EnvFilter;
 
 /// Launcher gRPC client CLI
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Server address
-    #[arg(long, default_value = "http://127.0.0.1:50051")]
-    addr: String,
+    /// Unix socket path for launcher server
+    #[arg(
+        long,
+        env = "LAUNCHER_SOCKET_PATH",
+        default_value = "/tmp/launcher.sock"
+    )]
+    socket_path: String,
 
     /// RPC timeout in seconds for create/delete operations
     #[arg(
@@ -59,10 +64,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
 
-    // Connect to server
-    let channel = Channel::from_shared(cli.addr)?
-        .timeout(Duration::from_secs(cli.timeout))
-        .connect()
+    // Connect to server via Unix socket
+    let socket_path = cli.socket_path.clone();
+    let channel = Endpoint::try_from("http://[::]:50051")?
+        .timeout(Duration::from_secs(5))
+        .connect_with_connector(service_fn(move |_: Uri| {
+            let path = socket_path.clone();
+            async move { tokio::net::UnixStream::connect(path).await }
+        }))
         .await?;
     let mut client = launcher::launcher_client::LauncherClient::new(channel);
 
