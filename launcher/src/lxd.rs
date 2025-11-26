@@ -493,7 +493,10 @@ impl LxdClient for RealLxdClient {
     async fn wait_for_shutdown(&self, name: &str, timeout: Duration) -> Result<(), LxdError> {
         let start = std::time::Instant::now();
         while start.elapsed() < timeout {
-            match self.get_json(&format!("/1.0/instances/{}", name)).await {
+            match self
+                .get_json(&format!("/1.0/instances/{}?recursion=1", name))
+                .await
+            {
                 Ok(json) => {
                     if let Some(status) = json.pointer("/metadata/status").and_then(|v| v.as_str())
                     {
