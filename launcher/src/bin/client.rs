@@ -14,7 +14,11 @@ struct Cli {
     addr: String,
 
     /// RPC timeout in seconds for create/delete operations
-    #[arg(long, env = "LAUNCHER_CLIENT_RPC_TIMEOUT_SECONDS", default_value = "120")]
+    #[arg(
+        long,
+        env = "LAUNCHER_CLIENT_RPC_TIMEOUT_SECONDS",
+        default_value = "300"
+    )]
     timeout: u64,
 
     #[command(subcommand)]
@@ -57,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Connect to server
     let channel = Channel::from_shared(cli.addr)?
-        .timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(cli.timeout))
         .connect()
         .await?;
     let mut client = launcher::launcher_client::LauncherClient::new(channel);
