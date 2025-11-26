@@ -427,7 +427,10 @@ impl LxdClient for RealLxdClient {
         let start = std::time::Instant::now();
         while start.elapsed() < timeout {
             // run `lxc info <name> --format=json`
-            match self.get_json(&format!("/1.0/instances/{}", name)).await {
+            match self
+                .get_json(&format!("/1.0/instances/{}?recursion=1", name))
+                .await
+            {
                 Ok(json) => {
                     if let Some(pid) = json.pointer("/metadata/state/pid").and_then(|v| v.as_u64())
                     {
@@ -435,18 +438,9 @@ impl LxdClient for RealLxdClient {
                             return Ok(pid as u32);
                         }
                     }
-                    if let Some(pid) = json.pointer("/metadata/pid").and_then(|v| v.as_u64()) {
-                        if pid > 0 {
-                            return Ok(pid as u32);
-                        }
-                    }
-                    if let Some(pid) = json.pointer("/state/pid").and_then(|v| v.as_u64()) {
-                        if pid > 0 {
-                            return Ok(pid as u32);
-                        }
-                    }
                     // if status is Running but no pid, continue waiting
-                    if let Some(status) = json.pointer("/status").and_then(|v| v.as_str()) {
+                    if let Some(status) = json.pointer("/metadata/status").and_then(|v| v.as_str())
+                    {
                         if status == "Running" {
                             // keep waiting
                         }
