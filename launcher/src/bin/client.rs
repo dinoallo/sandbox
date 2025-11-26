@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to server via Unix socket
     let socket_path = cli.socket_path.clone();
     let channel = Endpoint::try_from("http://[::]:50051")?
-        .timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(cli.timeout))
         .connect_with_connector(service_fn(move |_: Uri| {
             let path = socket_path.clone();
             async move { tokio::net::UnixStream::connect(path).await }
