@@ -3,9 +3,10 @@ use std::path::PathBuf;
 use nix::sched::{setns, CloneFlags};
 use std::fs::File;
 use tokio::net::UnixListener;
+use tokio::signal::unix::{signal, SignalKind};
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::Server;
-use tracing::info;
+use tracing::{info, warn};
 
 mod lxd;
 mod netops;
@@ -115,11 +116,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let uds = UnixListener::bind(&path)?;
     let uds_stream = UnixListenerStream::new(uds);
 
-    Server::builder()
-        .add_service(launcher::launcher_server::LauncherServer::new(svc))
-        .serve_with_incoming(uds_stream)
-        .await?;
+    // Set up signal handlers for graceful shutdown
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sigint = signal(SignalKind::interrupt())?;
+    let mut sigquit = signal(SignalKind::quit())?;
 
+    let server = Server::builder()
+        .add_service(launcher::launcher_server::LauncherServer::new(svc))
+        .serve_with_incoming(uds_stream);
+
+    info!("Server started, waiting for shutdown signal");
+
+    tokio::select! {
+        result = server => {
+            if let Err(e) = result {
+                tracing::error!("Server error: {}", e);
+                return Err(e.into());
+            }
+        }
+        _ = sigterm.recv() => {
+            info!("Received SIGTERM, shutting down gracefully");
+        }
+        _ = sigint.recv() => {
+            info!("Received SIGINT, shutting down gracefully");
+        }
+        _ = sigquit.recv() => {
+            info!("Received SIGQUIT, shutting down gracefully");
+        }
+    }
+
+    // Cleanup: remove socket file
+    if path.exists() {
+        if let Err(e) = std::fs::remove_file(&path) {
+            warn!("Failed to remove socket file: {}", e);
+        }
+    }
+
+    info!("Shutdown complete");
     Ok(())
 }
 
