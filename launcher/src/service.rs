@@ -93,21 +93,20 @@ impl crate::launcher::launcher_server::Launcher for LauncherService {
             .await
             .map_err(|e| Status::internal(format!("wait for pid failed: {}", e)))?;
 
-        // perform network ops if IP provided
-        if !req.ip.is_empty() {
-            let parent_if = self
-                .config
-                .macvlan_parent_if
-                .as_deref()
-                .unwrap_or(PARENT_IF);
-            let child_if = self.config.macvlan_child_if.as_deref().unwrap_or(CHILD_IF);
-            match delegate_ip_to_container(&ip, pid, parent_if, child_if).await {
-                Ok(_) => {
-                    tracing::info!(container=%name, pid=%pid, ip=%ip, "delegated ip to container");
-                }
-                Err(e) => {
-                    return Err(Status::internal(format!("network setup failed: {}", e)));
-                }
+        // perform network ops
+        // TODO: check if ip matches the ip of parent interface to avoid macvlan issues
+        let parent_if = self
+            .config
+            .macvlan_parent_if
+            .as_deref()
+            .unwrap_or(PARENT_IF);
+        let child_if = self.config.macvlan_child_if.as_deref().unwrap_or(CHILD_IF);
+        match delegate_ip_to_container(&ip, pid, parent_if, child_if).await {
+            Ok(_) => {
+                tracing::info!(container=%name, pid=%pid, ip=%ip, "delegated ip to container");
+            }
+            Err(e) => {
+                return Err(Status::internal(format!("network setup failed: {}", e)));
             }
         }
 
