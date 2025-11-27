@@ -22,8 +22,9 @@ COPY launcher/src ./src
 # Build release binary
 RUN cargo build --release --bin launcher
 
-FROM gcr.io/distroless/cc-debian12
+FROM gcr.io/distroless/cc-debian12:debug
 
+RUN apt-get update && apt-get install -y iproute2 && rm -rf /var/lib/apt/lists/*
 # Copy the compiled launcher binary from the builder
 COPY --from=builder /usr/src/launcher/target/release/launcher /usr/local/bin/launcher
 
