@@ -1,7 +1,9 @@
 use futures_util::TryStreamExt;
 use nix::sched::{setns, CloneFlags};
+use rtnetlink::RouteMessageBuilder;
 use rtnetlink::{packet_route::link::MacVlanMode, LinkMacVlan, LinkUnspec};
 use std::fs::File;
+use std::net::Ipv4Addr;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::time::Duration;
@@ -193,6 +195,29 @@ impl RealNetOps {
         Ok(())
     }
 
+    async fn add_route(
+        &self,
+        handle: &rtnetlink::Handle,
+        dest: ipnetwork::Ipv4Network,
+        gateway: ipnetwork::Ipv4Network,
+        dev: u32,
+        table_id: u32,
+    ) -> Result<(), NetOpsError> {
+        let route = RouteMessageBuilder::<Ipv4Addr>::new()
+            .destination_prefix(dest.ip(), dest.prefix())
+            .gateway(gateway.ip())
+            .output_interface(dev)
+            .table_id(table_id)
+            .build();
+        handle
+            .route()
+            .add(route)
+            .execute()
+            .await
+            .map_err(NetOpsError::Netlink)?;
+        Ok(())
+    }
+
     async fn set_prosmisc_by_name(
         &self,
         handle: &rtnetlink::Handle,
@@ -331,6 +356,24 @@ impl NetOperator for RealNetOps {
 
         self.set_link_up_by_name(&cn_handle, child_if).await?;
         self.add_addr_by_name(&cn_handle, child_if, addr, prefix)
+            .await?;
+        let dest = ipnetwork::Ipv4Network::new(Ipv4Addr::new(0, 0, 0, 0), 0).map_err(|e| {
+            NetOpsError::Permission(format!("invalid default route network: {}", e))
+        })?;
+        let gateway = ipnetwork::Ipv4Network::new(
+            match addr {
+                std::net::IpAddr::V4(v4) => v4,
+                std::net::IpAddr::V6(_) => {
+                    return Err(NetOpsError::Permission(
+                        "IPv6 is currently not supported".into(),
+                    ));
+                }
+            },
+            prefix,
+        )
+        .map_err(|e| NetOpsError::Permission(format!("invalid gateway network: {}", e)))?;
+        //TODO: avoid hardcoding table id
+        self.add_route(&cn_handle, dest, gateway, eth1_idx, 254)
             .await?;
 
         tracing::debug!(

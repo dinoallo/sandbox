@@ -28,6 +28,7 @@ nix = { version = "0.27", features = ["sched", "process"] }
 futures-util = "0.3"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 uuid = { version = "1.18.1", features = ["v4"] }
+ipnetwork = "0.21.1"
 
 [build-dependencies]
 tonic-build = "0.9"
