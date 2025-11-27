@@ -3,7 +3,7 @@ use nix::sched::{setns, CloneFlags};
 use rtnetlink::{packet_route::link::MacVlanMode, LinkMacVlan, LinkUnspec};
 use std::fs::File;
 use std::os::unix::io::AsRawFd;
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -78,6 +78,7 @@ pub trait NetOperator: Send + Sync {
         container_pid: u32,
         parent_if: &str,
         child_if: &str,
+        host_proc_path: &Path,
     ) -> Result<(), NetOpsError>;
 }
 
@@ -227,8 +228,15 @@ impl NetOperator for RealNetOps {
         container_pid: u32,
         parent_if: &str,
         child_if: &str,
+        host_proc_path: &Path,
     ) -> Result<(), NetOpsError> {
-        let ns_path = PathBuf::from(format!("/proc/{}/ns/net", container_pid));
+        let ns_path = host_proc_path.join(format!("{}/ns/net", container_pid));
+        if !ns_path.exists() {
+            return Err(NetOpsError::Permission(format!(
+                "netns path not found: {}",
+                ns_path.display()
+            )));
+        }
         if !ns_path.exists() {
             return Err(NetOpsError::Permission(format!(
                 "netns path not found: {}",
@@ -365,8 +373,9 @@ impl NetOperator for MockNetOps {
         container_pid: u32,
         parent_if: &str,
         child_if: &str,
+        host_proc_path: &Path,
     ) -> Result<(), NetOpsError> {
-        let ns_path = PathBuf::from(format!("/proc/{}/ns/net", container_pid));
+        let ns_path = host_proc_path.join(format!("{}/ns/net", container_pid));
         if !ns_path.exists() {
             return Err(NetOpsError::Permission(format!(
                 "netns path not found: {}",
@@ -385,17 +394,18 @@ pub async fn delegate_ip_to_container(
     container_pid: u32,
     parent_if: &str,
     child_if: &str,
+    host_proc_path: &Path,
 ) -> Result<(), NetOpsError> {
     let use_real = std::env::var("USE_REAL_NETOPS")
         .map(|v| v == "1" || v.to_lowercase() == "true")
         .unwrap_or(false);
     if use_real {
         let r = RealNetOps::new();
-        r.delegate_ip_to_container(ip, container_pid, parent_if, child_if)
+        r.delegate_ip_to_container(ip, container_pid, parent_if, child_if, host_proc_path)
             .await
     } else {
         let m = MockNetOps::new();
-        m.delegate_ip_to_container(ip, container_pid, parent_if, child_if)
+        m.delegate_ip_to_container(ip, container_pid, parent_if, child_if, host_proc_path)
             .await
     }
 }
@@ -431,14 +441,28 @@ mod tests {
 
     #[tokio::test]
     async fn delegate_missing_ns_err() {
-        let res = delegate_ip_to_container("192.0.2.10/24", 9999999, "parent0", "child0").await;
+        let res = delegate_ip_to_container(
+            "192.0.2.10/24",
+            9999999,
+            "parent0",
+            "child0",
+            Path::new("/proc"),
+        )
+        .await;
         assert!(res.is_err(), "expected error for missing netns");
     }
 
     #[tokio::test]
     async fn delegate_self_ns_ok() {
         let pid = std::process::id();
-        let res = delegate_ip_to_container("192.0.2.11/24", pid, "parent0", "child0").await;
+        let res = delegate_ip_to_container(
+            "192.0.2.11/24",
+            pid,
+            "parent0",
+            "child0",
+            Path::new("/proc"),
+        )
+        .await;
         assert!(
             res.is_ok(),
             "expected mock delegate to succeed for current process ns"

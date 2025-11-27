@@ -32,8 +32,12 @@ spec:
           value: "true"
         - name: LAUNCHER_SOCKET_PATH
           value: "/var/run/sandbox/launcher.sock"
+        - name: LAUNCHER_HOST_PROC_PATH
+          value: "/hostproc"
       securityContext:
         # least-privilege: only grant the network and sys_admin capabilities required
+        # TODO: further restrict as needed
+        privileged: true # Bidirectional mount propagation requires privileged mode
         capabilities:
           add: ["NET_ADMIN", "SYS_ADMIN"]
       volumeMounts:
@@ -43,6 +47,9 @@ spec:
         - name: sandbox-dir
           mountPath: /var/run/sandbox
           mountPropagation: Bidirectional
+        - name: hostproc
+          mountPath: /hostproc
+          readOnly: true
   volumes:
     - name: lxd-socket
       hostPath:
@@ -51,4 +58,9 @@ spec:
     - name: sandbox-dir
       hostPath:
         path: /var/run/sandbox
+        type: Directory
+    # TODO: consider using a more restricted mount than the full /proc
+    - name: hostproc
+      hostPath:
+        path: /proc
         type: Directory

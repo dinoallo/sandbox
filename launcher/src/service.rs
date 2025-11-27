@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,6 +17,7 @@ const DEFAULT_IP: &str = "172.16.0.1/24";
 const TIMEOUT: Duration = Duration::from_secs(10);
 const PARENT_IF: &str = "veth0";
 const CHILD_IF: &str = "eth1";
+const HOST_PROC_PATH: &str = "/proc";
 
 pub struct LauncherService {
     pub client: Box<dyn LxdClient + Send + Sync>,
@@ -31,6 +33,7 @@ pub struct LauncherConfig {
     pub timeout: Option<Duration>,
     pub macvlan_parent_if: Option<String>,
     pub macvlan_child_if: Option<String>,
+    pub host_proc_path: Option<String>,
 }
 
 impl LauncherService {
@@ -72,6 +75,12 @@ impl crate::launcher::launcher_server::Launcher for LauncherService {
         } else {
             req.ip.clone()
         };
+        let host_proc_path = PathBuf::from(
+            self.config
+                .host_proc_path
+                .as_deref()
+                .unwrap_or(HOST_PROC_PATH),
+        );
         // Basic serialized handling so the mock doesn't race
         let _guard = self.state.lock().await;
 
@@ -101,7 +110,7 @@ impl crate::launcher::launcher_server::Launcher for LauncherService {
             .as_deref()
             .unwrap_or(PARENT_IF);
         let child_if = self.config.macvlan_child_if.as_deref().unwrap_or(CHILD_IF);
-        match delegate_ip_to_container(&ip, pid, parent_if, child_if).await {
+        match delegate_ip_to_container(&ip, pid, parent_if, child_if, &host_proc_path).await {
             Ok(_) => {
                 tracing::info!(container=%name, pid=%pid, ip=%ip, "delegated ip to container");
             }
@@ -183,6 +192,7 @@ mod tests {
             timeout: None,
             macvlan_parent_if: None,
             macvlan_child_if: None,
+            host_proc_path: None,
         };
         let svc = LauncherService::new(Box::new(MockLxdClient::new()), config);
 
@@ -207,6 +217,7 @@ mod tests {
             timeout: None,
             macvlan_parent_if: None,
             macvlan_child_if: None,
+            host_proc_path: None,
         };
         let svc = LauncherService::new(Box::new(MockLxdClient::new()), config);
 

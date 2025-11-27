@@ -303,9 +303,10 @@ impl LxdClient for MockLxdClient {
 
     async fn wait_for_pid(&self, name: &str, _timeout: Duration) -> Result<u32, LxdError> {
         tracing::info!(container=%name, "mock wait for pid");
-        // simulate short asynchronous startup and return a fake pid
+        // simulate short asynchronous startup and return current process pid
+        // (this ensures /proc/{pid}/ns/net exists for tests)
         tokio::time::sleep(Duration::from_millis(50)).await;
-        Ok(12345)
+        Ok(std::process::id())
     }
 
     async fn delete_container(&self, name: &str) -> Result<(), LxdError> {
