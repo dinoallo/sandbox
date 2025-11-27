@@ -241,12 +241,27 @@ impl NetOperator for RealNetOps {
         let (connection, handle, _) = rtnetlink::new_connection().map_err(NetOpsError::Io)?;
         tokio::spawn(connection);
 
+        tracing::debug!(
+            ip=%ip,
+            container_pid=%container_pid,
+            parent_if=%parent_if,
+            child_if=%child_if,
+            "delegating ip to container"
+        );
         // Create macvlan with automatic cleanup on failure
         let eth1_idx = self.create_macvlan(&handle, parent_if, child_if).await?;
         let eth1_guard = LinkGuard::new(handle.clone(), eth1_idx);
 
         // All operations from here will auto-cleanup eth1 on failure
         self.set_link_up_by_name(&handle, child_if).await?;
+
+        tracing::debug!(
+            ip=%ip,
+            container_pid=%container_pid,
+            parent_if=%parent_if,
+            child_if=%child_if,
+            "set {} up", child_if
+        );
 
         if let Err(e) = self.set_prosmisc_by_name(&handle, parent_if).await {
             tracing::warn!(
@@ -256,15 +271,38 @@ impl NetOperator for RealNetOps {
             );
         }
 
+        tracing::debug!(
+            ip=%ip,
+            container_pid=%container_pid,
+            parent_if=%parent_if,
+            child_if=%child_if,
+            "set {} promisc mode", parent_if
+        );
+
         let ns_file = File::open(&ns_path)?;
         let fd = ns_file.as_raw_fd();
 
         self.move_link_to_ns_by_fd(&handle, child_if, fd).await?;
 
+        tracing::debug!(
+            ip=%ip,
+            container_pid=%container_pid,
+            parent_if=%parent_if,
+            child_if=%child_if,
+            "moved {} to container namespace", child_if
+        );
+
         // Link moved to container namespace - disarm host cleanup
         eth1_guard.disarm();
 
         // Enter container namespace with automatic restore on drop
+        tracing::debug!(
+            ip=%ip,
+            container_pid=%container_pid,
+            parent_if=%parent_if,
+            child_if=%child_if,
+            "entering container network namespace"
+        );
         let original = File::open("/proc/self/ns/net")?;
         let _netns_guard = NetnsGuard::new(original);
 
@@ -274,15 +312,37 @@ impl NetOperator for RealNetOps {
         let (cn_conn, cn_handle, _) = rtnetlink::new_connection().map_err(NetOpsError::Io)?;
         tokio::spawn(cn_conn);
 
-        // Create cleanup guard for link in container namespace
+        tracing::debug!(
+            ip=%ip,
+            container_pid=%container_pid,
+            parent_if=%parent_if,
+            child_if=%child_if,
+            "creating cleanup guard for link in container namespace"
+        );
         let container_eth1_guard = LinkGuard::new(cn_handle.clone(), eth1_idx);
 
         self.set_link_up_by_name(&cn_handle, child_if).await?;
         self.add_addr_by_name(&cn_handle, child_if, addr, prefix)
             .await?;
 
+        tracing::debug!(
+            ip=%ip,
+            container_pid=%container_pid,
+            parent_if=%parent_if,
+            child_if=%child_if,
+            "assigned ip {} to {}", ip, child_if
+        );
+
         // Success! Disarm container cleanup
         container_eth1_guard.disarm();
+
+        tracing::debug!(
+            ip=%ip,
+            container_pid=%container_pid,
+            parent_if=%parent_if,
+            child_if=%child_if,
+            "successfully delegated ip to container"
+        );
 
         // Namespace will be automatically restored by NetnsGuard::drop
         Ok(())
