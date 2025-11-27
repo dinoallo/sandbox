@@ -34,6 +34,8 @@ spec:
           value: "/var/run/sandbox/launcher.sock"
         - name: LAUNCHER_HOST_PROC_PATH
           value: "/hostproc"
+        - name: LAUNCHER_MACVLAN_PARENT_IF
+          value: "eth0"
       securityContext:
         # least-privilege: only grant the network and sys_admin capabilities required
         # TODO: further restrict as needed
