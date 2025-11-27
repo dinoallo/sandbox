@@ -11,16 +11,33 @@ use crate::launcher::{
 use crate::lxd::LxdClient;
 use crate::netops::delegate_ip_to_container;
 
+const DEFAULT_IMAGE: &str = "alpine/3.19";
+const DEFAULT_IP: &str = "172.16.0.1/24";
+const TIMEOUT: Duration = Duration::from_secs(10);
+const PARENT_IF: &str = "veth0";
+const CHILD_IF: &str = "eth1";
+
 pub struct LauncherService {
-    client: Box<dyn LxdClient + Send + Sync>,
+    pub client: Box<dyn LxdClient + Send + Sync>,
+    config: LauncherConfig,
     // internal mutex for basic concurrency control in mock
     state: Arc<Mutex<()>>,
 }
 
+#[derive(Clone)]
+pub struct LauncherConfig {
+    pub default_image: Option<String>,
+    pub default_ip: Option<String>,
+    pub timeout: Option<Duration>,
+    pub macvlan_parent_if: Option<String>,
+    pub macvlan_child_if: Option<String>,
+}
+
 impl LauncherService {
-    pub fn new(client: Box<dyn LxdClient + Send + Sync>) -> Self {
+    pub fn new(client: Box<dyn LxdClient + Send + Sync>, config: LauncherConfig) -> Self {
         Self {
             client,
+            config,
             state: Default::default(),
         }
     }
@@ -33,13 +50,28 @@ impl crate::launcher::launcher_server::Launcher for LauncherService {
         req: Request<CreateRequest>,
     ) -> Result<Response<CreateResponse>, Status> {
         let req = req.into_inner();
-        let name = req.name.clone();
+        let name = if req.name.is_empty() {
+            // Generate a random name, for example using a UUID or any other method
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            req.name.clone()
+        };
         let image = if req.image.is_empty() {
-            "alpine/3.19".to_string()
+            self.config
+                .default_image
+                .clone()
+                .unwrap_or_else(|| DEFAULT_IMAGE.to_string())
         } else {
             req.image.clone()
         };
-
+        let ip = if req.ip.is_empty() {
+            self.config
+                .default_ip
+                .clone()
+                .unwrap_or_else(|| DEFAULT_IP.to_string())
+        } else {
+            req.ip.clone()
+        };
         // Basic serialized handling so the mock doesn't race
         let _guard = self.state.lock().await;
 
@@ -57,15 +89,21 @@ impl crate::launcher::launcher_server::Launcher for LauncherService {
         // Wait for container to be running and get main pid
         let pid = self
             .client
-            .wait_for_pid(&name, Duration::from_secs(10))
+            .wait_for_pid(&name, self.config.timeout.unwrap_or(TIMEOUT))
             .await
             .map_err(|e| Status::internal(format!("wait for pid failed: {}", e)))?;
 
         // perform network ops if IP provided
         if !req.ip.is_empty() {
-            match delegate_ip_to_container(&req.ip, pid, "veth0", "eth1").await {
+            let parent_if = self
+                .config
+                .macvlan_parent_if
+                .as_deref()
+                .unwrap_or(PARENT_IF);
+            let child_if = self.config.macvlan_child_if.as_deref().unwrap_or(CHILD_IF);
+            match delegate_ip_to_container(&ip, pid, parent_if, child_if).await {
                 Ok(_) => {
-                    tracing::info!(container=%name, pid=%pid, ip=%req.ip, "delegated ip to container");
+                    tracing::info!(container=%name, pid=%pid, ip=%ip, "delegated ip to container");
                 }
                 Err(e) => {
                     return Err(Status::internal(format!("network setup failed: {}", e)));
@@ -126,6 +164,7 @@ impl Clone for LauncherService {
         Self {
             client: self.client.clone_box(),
             state: self.state.clone(),
+            config: self.config.clone(),
         }
     }
 }
@@ -139,7 +178,14 @@ mod tests {
 
     #[tokio::test]
     async fn create_without_ip_succeeds() {
-        let svc = LauncherService::new(Box::new(MockLxdClient::new()));
+        let config = LauncherConfig {
+            default_image: Some("alpine/3.19".to_string()),
+            default_ip: None,
+            timeout: None,
+            macvlan_parent_if: None,
+            macvlan_child_if: None,
+        };
+        let svc = LauncherService::new(Box::new(MockLxdClient::new()), config);
 
         let req = Request::new(CreateRequest {
             name: "mytest".to_string(),
@@ -156,7 +202,14 @@ mod tests {
 
     #[tokio::test]
     async fn delete_succeeds() {
-        let svc = LauncherService::new(Box::new(MockLxdClient::new()));
+        let config = LauncherConfig {
+            default_image: Some("alpine/3.19".to_string()),
+            default_ip: None,
+            timeout: None,
+            macvlan_parent_if: None,
+            macvlan_child_if: None,
+        };
+        let svc = LauncherService::new(Box::new(MockLxdClient::new()), config);
 
         let req = Request::new(DeleteRequest {
             name: "mytest".to_string(),

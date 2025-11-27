@@ -100,7 +100,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let svc = LauncherService::new(lxd_client);
+    let config = service::LauncherConfig {
+        default_image: std::env::var("LAUNCHER_DEFAULT_IMAGE").ok(),
+        default_ip: std::env::var("LAUNCHER_DEFAULT_IP").ok(),
+        timeout: std::env::var("LAUNCHER_OPERATION_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(std::time::Duration::from_secs),
+        macvlan_parent_if: std::env::var("LAUNCHER_MACVLAN_PARENT_IF").ok(),
+        macvlan_child_if: std::env::var("LAUNCHER_MACVLAN_CHILD_IF").ok(),
+    };
+    let svc = LauncherService::new(lxd_client, config);
 
     let uds = UnixListener::bind(&path)?;
     let uds_stream = UnixListenerStream::new(uds);
