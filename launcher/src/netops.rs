@@ -1,5 +1,4 @@
 use futures_util::TryStreamExt;
-use netlink_packet_route::link;
 use nix::sched::{setns, CloneFlags};
 use rtnetlink::{packet_route::link::MacVlanMode, LinkMacVlan, LinkUnspec};
 use std::fs::File;
@@ -99,10 +98,9 @@ impl RealNetOps {
         if let Some(parent) = parent_links.try_next().await? {
             let parent_index = parent.header.index;
             let builder = LinkMacVlan::new(name, parent_index, MacVlanMode::Passthrough);
-
             let link_msg = builder.build();
 
-            let _ = handle
+            handle
                 .link()
                 .add(link_msg)
                 .execute()
@@ -119,10 +117,10 @@ impl RealNetOps {
         if let Some(msg) = new_links.try_next().await.map_err(NetOpsError::Netlink)? {
             return Ok(msg.header.index);
         }
-        return Err(NetOpsError::Permission(format!(
+        Err(NetOpsError::Permission(format!(
             "failed to create macvlan {}",
             name
-        )));
+        )))
     }
 
     async fn set_link_up_by_name(
