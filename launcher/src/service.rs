@@ -63,7 +63,7 @@ impl crate::launcher::launcher_server::Launcher for LauncherService {
 
         // perform network ops if IP provided
         if !req.ip.is_empty() {
-            match delegate_ip_to_container(&req.ip, pid).await {
+            match delegate_ip_to_container(&req.ip, pid, "veth0", "eth1").await {
                 Ok(_) => {
                     tracing::info!(container=%name, pid=%pid, ip=%req.ip, "delegated ip to container");
                 }

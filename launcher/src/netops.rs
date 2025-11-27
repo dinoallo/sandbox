@@ -1,6 +1,7 @@
 use futures_util::TryStreamExt;
+use netlink_packet_route::link;
 use nix::sched::{setns, CloneFlags};
-use rtnetlink::LinkUnspec;
+use rtnetlink::{packet_route::link::MacVlanMode, LinkMacVlan, LinkUnspec};
 use std::fs::File;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
@@ -17,28 +18,70 @@ pub enum NetOpsError {
     Permission(String),
 }
 
-/// Delegate the given ip (string like "192.0.2.10/24") from the host eth0 to the container's netns.
-/// This implements the high-level steps from the guide:
-///  - create macvlan eth1 linked to eth0
-///  - set eth1 up
-///  - set eth0 promisc on
-///  - move eth1 to container netns (by pid)
-///  - remove ip from host eth0 and add it inside the container's netns on eth1
-///
-/// NOTE: these operations require root and will fail without the necessary capabilities. In
-/// this repository we implement the logic but tests use the mock LXD client and do not require
-/// an actual LXD installation.
-// NetOperator trait — allows real or mock implementations
+// RAII guard for automatic link cleanup on failure
+struct LinkGuard {
+    handle: rtnetlink::Handle,
+    index: Option<u32>,
+}
+
+impl LinkGuard {
+    fn new(handle: rtnetlink::Handle, index: u32) -> Self {
+        Self {
+            handle,
+            index: Some(index),
+        }
+    }
+
+    // Call on success to prevent cleanup
+    fn disarm(mut self) {
+        self.index = None;
+    }
+}
+
+impl Drop for LinkGuard {
+    fn drop(&mut self) {
+        if let Some(index) = self.index {
+            let handle = self.handle.clone();
+            // Spawn cleanup task (best effort, don't block)
+            tokio::spawn(async move {
+                if let Err(e) = handle.link().del(index).execute().await {
+                    tracing::warn!("failed to cleanup link {}: {}", index, e);
+                }
+            });
+        }
+    }
+}
+
+// Guard for restoring network namespace
+struct NetnsGuard {
+    original_fd: File,
+}
+
+impl NetnsGuard {
+    fn new(original_fd: File) -> Self {
+        Self { original_fd }
+    }
+}
+
+impl Drop for NetnsGuard {
+    fn drop(&mut self) {
+        if let Err(e) = setns(&self.original_fd, CloneFlags::CLONE_NEWNET) {
+            tracing::error!("failed to restore network namespace: {}", e);
+        }
+    }
+}
+
 #[async_trait::async_trait]
 pub trait NetOperator: Send + Sync {
     async fn delegate_ip_to_container(
         &self,
         ip: &str,
         container_pid: u32,
+        parent_if: &str,
+        child_if: &str,
     ) -> Result<(), NetOpsError>;
 }
 
-/// RealNetOps: perform the network operations using rtnetlink and setns
 pub struct RealNetOps {}
 
 impl RealNetOps {
@@ -49,50 +92,37 @@ impl RealNetOps {
     async fn create_macvlan(
         &self,
         handle: &rtnetlink::Handle,
-        master: &str,
+        parent: &str,
         name: &str,
     ) -> Result<u32, NetOpsError> {
-        // find master
-        let mut links = handle.link().get().match_name(master.to_string()).execute();
-        let master_opt = links.try_next().await.map_err(NetOpsError::Netlink)?;
-        let master_msg = master_opt.ok_or_else(|| {
-            NetOpsError::Permission(format!("master device {} not found", master))
-        })?;
-        let master_index = master_msg.header.index;
+        let mut parent_links = handle.link().get().match_name(parent.to_string()).execute();
+        if let Some(parent) = parent_links.try_next().await? {
+            let parent_index = parent.header.index;
+            let builder = LinkMacVlan::new(name, parent_index, MacVlanMode::Passthrough);
 
-        // create macvlan using netlink-packet-route types
-        use netlink_packet_route::link::LinkAttribute;
-        use netlink_packet_route::link::{
-            InfoData, InfoKind, LinkInfo, LinkLayerType, LinkMessage,
-        };
-        let mut link_msg = LinkMessage::default();
-        link_msg.header.index = 0; // 0 means create new
-        link_msg.header.link_layer_type = LinkLayerType::Ether;
-        link_msg
-            .attributes
-            .push(LinkAttribute::IfName(name.to_string()));
-        link_msg.attributes.push(LinkAttribute::Link(master_index));
-        link_msg.attributes.push(LinkAttribute::LinkInfo(vec![
-            LinkInfo::Kind(InfoKind::MacVlan),
-            LinkInfo::Data(InfoData::MacVlan(vec![])),
-        ]));
+            let link_msg = builder.build();
 
-        let _ = handle
-            .link()
-            .add(link_msg)
-            .execute()
-            .await
-            .map_err(NetOpsError::Netlink)?;
-
-        // find created link
+            let _ = handle
+                .link()
+                .add(link_msg)
+                .execute()
+                .await
+                .map_err(NetOpsError::Netlink)?;
+        } else {
+            return Err(NetOpsError::Permission(format!(
+                "parent interface {} not found",
+                parent
+            )));
+        }
+        // Check if the macvlan interface was created successfully
         let mut new_links = handle.link().get().match_name(name.to_string()).execute();
         if let Some(msg) = new_links.try_next().await.map_err(NetOpsError::Netlink)? {
             return Ok(msg.header.index);
         }
-        Err(NetOpsError::Permission(format!(
+        return Err(NetOpsError::Permission(format!(
             "failed to create macvlan {}",
             name
-        )))
+        )));
     }
 
     async fn set_link_up_by_name(
@@ -108,6 +138,11 @@ impl RealNetOps {
                 .execute()
                 .await
                 .map_err(NetOpsError::Netlink)?;
+        } else {
+            return Err(NetOpsError::Permission(format!(
+                "interface {} not found",
+                name
+            )));
         }
         Ok(())
     }
@@ -115,29 +150,24 @@ impl RealNetOps {
     async fn move_link_to_ns_by_fd(
         &self,
         handle: &rtnetlink::Handle,
-        idx: u32,
+        name: &str,
         fd: i32,
     ) -> Result<(), NetOpsError> {
-        let mut links = handle.link().get().execute();
-        while let Some(msg) = links.try_next().await.map_err(NetOpsError::Netlink)? {
-            if msg.header.index == idx {
-                handle
-                    .link()
-                    .set(
-                        LinkUnspec::new_with_index(msg.header.index)
-                            .setns_by_fd(fd)
-                            .build(),
-                    )
-                    .execute()
-                    .await
-                    .map_err(NetOpsError::Netlink)?;
-                return Ok(());
-            }
+        let mut links = handle.link().get().match_name(name.to_string()).execute();
+        if let Some(msg) = links.try_next().await.map_err(NetOpsError::Netlink)? {
+            handle
+                .link()
+                .set(
+                    LinkUnspec::new_with_index(msg.header.index)
+                        .setns_by_fd(fd)
+                        .build(),
+                )
+                .execute()
+                .await
+                .map_err(NetOpsError::Netlink)?;
+            return Ok(());
         }
-        Err(NetOpsError::Permission(format!(
-            "link index {} not found",
-            idx
-        )))
+        Err(NetOpsError::Permission(format!("link {} not found", name)))
     }
 
     async fn add_addr_by_name(
@@ -155,6 +185,37 @@ impl RealNetOps {
                 .execute()
                 .await
                 .map_err(NetOpsError::Netlink)?;
+        } else {
+            return Err(NetOpsError::Permission(format!(
+                "interface {} not found",
+                ifname
+            )));
+        }
+        Ok(())
+    }
+
+    async fn set_prosmisc_by_name(
+        &self,
+        handle: &rtnetlink::Handle,
+        ifname: &str,
+    ) -> Result<(), NetOpsError> {
+        let mut links = handle.link().get().match_name(ifname.to_string()).execute();
+        if let Some(msg) = links.try_next().await.map_err(NetOpsError::Netlink)? {
+            handle
+                .link()
+                .set(
+                    LinkUnspec::new_with_index(msg.header.index)
+                        .promiscuous(true)
+                        .build(),
+                )
+                .execute()
+                .await
+                .map_err(NetOpsError::Netlink)?;
+        } else {
+            return Err(NetOpsError::Permission(format!(
+                "interface {} not found",
+                ifname
+            )));
         }
         Ok(())
     }
@@ -166,8 +227,9 @@ impl NetOperator for RealNetOps {
         &self,
         ip: &str,
         container_pid: u32,
+        parent_if: &str,
+        child_if: &str,
     ) -> Result<(), NetOpsError> {
-        // validate input
         let ns_path = PathBuf::from(format!("/proc/{}/ns/net", container_pid));
         if !ns_path.exists() {
             return Err(NetOpsError::Permission(format!(
@@ -176,115 +238,59 @@ impl NetOperator for RealNetOps {
             )));
         }
 
-        // parse ip/prefix
         let (addr, prefix) = parse_ip_with_prefix(ip)?;
 
-        // create rtnetlink connection in host
         let (connection, handle, _) = rtnetlink::new_connection().map_err(NetOpsError::Io)?;
         tokio::spawn(connection);
 
-        // create macvlan eth1 linked to veth0
-        let eth1_idx = self.create_macvlan(&handle, "veth0", "eth1").await?;
-        // flags not required — we'll perform best-effort cleanup inline
+        // Create macvlan with automatic cleanup on failure
+        let eth1_idx = self.create_macvlan(&handle, parent_if, child_if).await?;
+        let eth1_guard = LinkGuard::new(handle.clone(), eth1_idx);
 
-        // bring eth1 up
-        if let Err(e) = self.set_link_up_by_name(&handle, "eth1").await {
-            // Attempt host cleanup and return
-            let _ = handle.link().del(eth1_idx).execute().await;
-            return Err(e);
+        // All operations from here will auto-cleanup eth1 on failure
+        self.set_link_up_by_name(&handle, child_if).await?;
+
+        if let Err(e) = self.set_prosmisc_by_name(&handle, parent_if).await {
+            tracing::warn!(
+                "failed to set {} promisc mode, continuing: {}",
+                parent_if,
+                e
+            );
         }
 
-        // try best-effort: set veth0 promisc
-        if let Ok(Some(msg)) = handle
-            .link()
-            .get()
-            .match_name("veth0".to_string())
-            .execute()
-            .try_next()
-            .await
-        {
-            use netlink_packet_route::link::LinkFlags;
-            const IFF_PROMISC: u32 = 0x100; // from if.h
-            let mut set_msg = msg.clone();
-            set_msg.header.flags |= LinkFlags::from_bits_truncate(IFF_PROMISC);
-            set_msg.header.change_mask |= LinkFlags::from_bits_truncate(IFF_PROMISC);
-            let _ = handle.link().set(set_msg).execute().await;
-        }
-
-        // move eth1 into container netns by fd
         let ns_file = File::open(&ns_path)?;
         let fd = ns_file.as_raw_fd();
 
-        if let Err(e) = self.move_link_to_ns_by_fd(&handle, eth1_idx, fd).await {
-            // try to remove host eth1 as cleanup
-            let _ = handle.link().del(eth1_idx).execute().await;
-            return Err(e);
-        }
-        // macvlan has been moved into container netns
+        self.move_link_to_ns_by_fd(&handle, child_if, fd).await?;
 
-        // inside target namespace: set eth1 up and add ip
-        // save original namespace
+        // Link moved to container namespace - disarm host cleanup
+        eth1_guard.disarm();
+
+        // Enter container namespace with automatic restore on drop
         let original = File::open("/proc/self/ns/net")?;
+        let _netns_guard = NetnsGuard::new(original);
+
         setns(&ns_file, CloneFlags::CLONE_NEWNET)
             .map_err(|e| NetOpsError::Permission(format!("setns failed: {}", e)))?;
 
         let (cn_conn, cn_handle, _) = rtnetlink::new_connection().map_err(NetOpsError::Io)?;
         tokio::spawn(cn_conn);
 
-        // if any subsequent operations in container fail, attempt best-effort cleanup
-        if let Err(e) = self.set_link_up_by_name(&cn_handle, "eth1").await {
-            // try to clean up host if moved failed (unlikely here), but be safe
-            // try to remove eth1 inside container namespace
-            if let Ok(Some(msg)) = cn_handle
-                .link()
-                .get()
-                .match_name("eth1".to_string())
-                .execute()
-                .try_next()
-                .await
-            {
-                let _ = cn_handle.link().del(msg.header.index).execute().await;
-            }
-            // restore ns and return
-            setns(&original, CloneFlags::CLONE_NEWNET)
-                .map_err(|e| NetOpsError::Permission(format!("restore setns failed: {}", e)))?;
-            return Err(e);
-        }
+        // Create cleanup guard for link in container namespace
+        let container_eth1_guard = LinkGuard::new(cn_handle.clone(), eth1_idx);
 
-        if let Err(e) = self
-            .add_addr_by_name(&cn_handle, "eth1", addr, prefix)
-            .await
-        {
-            // attempt to remove eth1 in container namespace
-            if let Ok(Some(msg)) = cn_handle
-                .link()
-                .get()
-                .match_name("eth1".to_string())
-                .execute()
-                .try_next()
-                .await
-            {
-                let _ = cn_handle.link().del(msg.header.index).execute().await;
-            }
-            // restore ns and return
-            setns(&original, CloneFlags::CLONE_NEWNET)
-                .map_err(|e| NetOpsError::Permission(format!("restore setns failed: {}", e)))?;
-            return Err(e);
-        }
-        // no cleanup needed
+        self.set_link_up_by_name(&cn_handle, child_if).await?;
+        self.add_addr_by_name(&cn_handle, child_if, addr, prefix)
+            .await?;
 
-        // restore namespace
-        // restore namespace
-        setns(&original, CloneFlags::CLONE_NEWNET)
-            .map_err(|e| NetOpsError::Permission(format!("restore setns failed: {}", e)))?;
+        // Success! Disarm container cleanup
+        container_eth1_guard.disarm();
 
-        // At this point success — no cleanup needed
-
+        // Namespace will be automatically restored by NetnsGuard::drop
         Ok(())
     }
 }
 
-/// MockNetOps used for tests and when real implementation is not enabled
 pub struct MockNetOps {}
 
 impl MockNetOps {
@@ -299,8 +305,9 @@ impl NetOperator for MockNetOps {
         &self,
         ip: &str,
         container_pid: u32,
+        parent_if: &str,
+        child_if: &str,
     ) -> Result<(), NetOpsError> {
-        // same behavior as previous simulated function
         let ns_path = PathBuf::from(format!("/proc/{}/ns/net", container_pid));
         if !ns_path.exists() {
             return Err(NetOpsError::Permission(format!(
@@ -309,23 +316,29 @@ impl NetOperator for MockNetOps {
             )));
         }
         parse_ip_with_prefix(ip)?;
-        tracing::info!(%container_pid, ip=%ip, "mock delegate_ip_to_container");
+        tracing::info!(%container_pid, ip=%ip, parent_if=%parent_if, child_if=%child_if, "mock delegate_ip_to_container");
         tokio::time::sleep(Duration::from_millis(5)).await;
         Ok(())
     }
 }
 
-/// Module-level wrapper — choose real or mock implementation via USE_REAL_NETOPS
-pub async fn delegate_ip_to_container(ip: &str, container_pid: u32) -> Result<(), NetOpsError> {
+pub async fn delegate_ip_to_container(
+    ip: &str,
+    container_pid: u32,
+    parent_if: &str,
+    child_if: &str,
+) -> Result<(), NetOpsError> {
     let use_real = std::env::var("USE_REAL_NETOPS")
         .map(|v| v == "1" || v.to_lowercase() == "true")
         .unwrap_or(false);
     if use_real {
         let r = RealNetOps::new();
-        r.delegate_ip_to_container(ip, container_pid).await
+        r.delegate_ip_to_container(ip, container_pid, parent_if, child_if)
+            .await
     } else {
         let m = MockNetOps::new();
-        m.delegate_ip_to_container(ip, container_pid).await
+        m.delegate_ip_to_container(ip, container_pid, parent_if, child_if)
+            .await
     }
 }
 
@@ -360,16 +373,14 @@ mod tests {
 
     #[tokio::test]
     async fn delegate_missing_ns_err() {
-        // use a pid that almost certainly does not exist
-        let res = delegate_ip_to_container("192.0.2.10/24", 9999999).await;
+        let res = delegate_ip_to_container("192.0.2.10/24", 9999999, "parent0", "child0").await;
         assert!(res.is_err(), "expected error for missing netns");
     }
 
     #[tokio::test]
     async fn delegate_self_ns_ok() {
-        // using this process's pid should succeed under the mock implementation
         let pid = std::process::id();
-        let res = delegate_ip_to_container("192.0.2.11/24", pid).await;
+        let res = delegate_ip_to_container("192.0.2.11/24", pid, "parent0", "child0").await;
         assert!(
             res.is_ok(),
             "expected mock delegate to succeed for current process ns"
