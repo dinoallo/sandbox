@@ -24,6 +24,14 @@ spec:
       env:
         - name: RUST_LOG
           value: info
+        - name: LAUNCHER_DEFAULT_IMAGE
+          value: "alpine/3.19"
+        - name: USE_REAL_LXD
+          value: "true"
+        - name: USE_REAL_NETOPS
+          value: "true"
+        - name: LAUNCHER_SOCKET_PATH
+          value: "/var/run/sandbox/launcher.sock"
       securityContext:
         # least-privilege: only grant the network and sys_admin capabilities required
         capabilities:
@@ -32,8 +40,15 @@ spec:
         - name: lxd-socket
           mountPath: /var/snap/lxd/common/lxd/unix.socket
           readOnly: true
+        - name: sandbox-dir
+          mountPath: /var/run/sandbox
+          mountPropagation: Bidirectional
   volumes:
     - name: lxd-socket
       hostPath:
         path: /var/snap/lxd/common/lxd/unix.socket
         type: Socket
+    - name: sandbox-dir
+      hostPath:
+        path: /var/run/sandbox
+        type: Directory
