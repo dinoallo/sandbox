@@ -22,8 +22,7 @@ COPY launcher/src ./src
 # Build release binary
 RUN cargo build --release --bin launcher
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+FROM gcr.io/distroless/cc-debian12
 
 # Copy the compiled launcher binary from the builder
 COPY --from=builder /usr/src/launcher/target/release/launcher /usr/local/bin/launcher
